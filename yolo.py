@@ -1,12 +1,33 @@
-import os
-os.environ["STREAMLIT_SERVER_HEADLESS"] = "true"
 import streamlit as st
-from ultralytics import YOLO
-from huggingface_hub import hf_hub_download
-from PIL import Image
 import os
 import json
 from datetime import datetime
+from PIL import Image
+
+# ---------------------------
+# FIX: PyTorch YOLOv8 Safe Loading (WICHTIG)
+# ---------------------------
+import torch
+from ultralytics.nn.tasks import DetectionModel
+
+torch.serialization.add_safe_globals([DetectionModel])
+
+# ---------------------------
+# FIX: YOLO CONFIG DIR (Streamlit Cloud)
+# ---------------------------
+os.environ["YOLO_CONFIG_DIR"] = "/tmp"
+
+# ---------------------------
+# YOLOv8 MODEL
+# ---------------------------
+from ultralytics import YOLO
+
+@st.cache_resource
+def load_model():
+    model = YOLO("yolov8n.pt")  # lädt automatisch oder cached
+    return model
+
+model = load_model()
 
 # ---------------------------
 # CONFIG
@@ -15,26 +36,6 @@ UPLOAD_FOLDER = "uploads"
 DB_FILE = "fundbuero.json"
 
 os.makedirs(UPLOAD_FOLDER, exist_ok=True)
-
-# ---------------------------
-# MODEL LADEN (YOLOv8)
-# ---------------------------
-@st.cache_resource
-def load_model():
-    try:
-        # Versuch: Modell von Hugging Face laden
-        model_path = hf_hub_download(
-            repo_id="Ultralytics/YOLOv8",
-            filename="yolov8n.pt"
-        )
-    except:
-        # Fallback: direkt laden (falls HF nicht geht)
-        model_path = "yolov8n.pt"
-
-    model = YOLO(model_path)
-    return model
-
-model = load_model()
 
 # ---------------------------
 # DATABASE
@@ -52,7 +53,7 @@ def save_database(data):
 # ---------------------------
 # UI
 # ---------------------------
-st.title("🏫 Digitales Fundbüro")
+st.title("🏫 Digitales Fundbüro (YOLOv8)")
 
 menu = st.sidebar.selectbox(
     "Menü",
@@ -66,17 +67,19 @@ if menu == "Gegenstand hochladen":
     st.header("📸 Neuen Gegenstand melden")
 
     finder_name = st.text_input("Dein Name")
-    location = st.text_input("Fundort (z.B. Aula, Sporthalle)")
+    location = st.text_input("Fundort")
     description = st.text_area("Beschreibung (optional)")
 
-    uploaded_file = st.file_uploader("Foto hochladen", type=["jpg", "png", "jpeg"])
+    uploaded_file = st.file_uploader("Bild hochladen", type=["jpg", "png", "jpeg"])
 
     if uploaded_file is not None:
         image = Image.open(uploaded_file).convert("RGB")
         st.image(image, use_container_width=True)
 
-        if st.button("Kategorie automatisch erkennen"):
+        class_name = "Unbekannt"
+        confidence_score = 0.0
 
+        if st.button("🔍 Kategorie erkennen"):
             results = model(image)
 
             if len(results[0].boxes) > 0:
@@ -86,51 +89,46 @@ if menu == "Gegenstand hochladen":
                 class_name = model.names[class_id]
                 confidence_score = float(box.conf[0])
 
-                st.success(f"Erkannte Kategorie: {class_name}")
-                st.write(f"Sicherheit: {round(confidence_score*100, 2)} %")
+                st.success(f"Erkannt: {class_name}")
+                st.write(f"Sicherheit: {round(confidence_score * 100, 2)} %")
 
-                # Bild mit Bounding Box anzeigen
-                result_img = results[0].plot()
-                st.image(result_img, caption="Erkennung", use_container_width=True)
+                st.image(results[0].plot(), caption="Erkennung")
 
             else:
-                class_name = "Unbekannt"
-                confidence_score = 0.0
                 st.warning("Kein Objekt erkannt.")
 
-            # Speichern Button
-            if st.button("Im Fundbüro speichern"):
-                filename = f"{datetime.now().strftime('%Y%m%d%H%M%S')}.jpg"
-                filepath = os.path.join(UPLOAD_FOLDER, filename)
-                image.save(filepath)
+        if st.button("💾 Speichern"):
+            filename = f"{datetime.now().strftime('%Y%m%d%H%M%S')}.jpg"
+            filepath = os.path.join(UPLOAD_FOLDER, filename)
+            image.save(filepath)
 
-                db = load_database()
-                db.append({
-                    "id": len(db) + 1,
-                    "category": class_name,
-                    "confidence": confidence_score,
-                    "image_path": filepath,
-                    "finder": finder_name,
-                    "location": location,
-                    "description": description,
-                    "date": datetime.now().strftime("%d.%m.%Y %H:%M"),
-                    "status": "Offen",
-                    "messages": []
-                })
+            db = load_database()
+            db.append({
+                "id": len(db) + 1,
+                "category": class_name,
+                "confidence": confidence_score,
+                "image_path": filepath,
+                "finder": finder_name,
+                "location": location,
+                "description": description,
+                "date": datetime.now().strftime("%d.%m.%Y %H:%M"),
+                "status": "Offen",
+                "messages": []
+            })
 
-                save_database(db)
-                st.success("Gegenstand wurde gespeichert!")
+            save_database(db)
+            st.success("Gespeichert!")
 
 # ===========================
 # SUCHEN
 # ===========================
 elif menu == "Durchsuchen":
-    st.header("🔎 Gefundene Gegenstände")
+    st.header("🔎 Fundstücke")
 
     db = load_database()
 
-    if len(db) == 0:
-        st.info("Noch keine Gegenstände vorhanden.")
+    if not db:
+        st.info("Keine Einträge vorhanden.")
     else:
         categories = list(set(item["category"] for item in db))
         selected_category = st.selectbox("Kategorie", ["Alle"] + categories)
@@ -142,33 +140,27 @@ elif menu == "Durchsuchen":
                (status_filter == "Alle" or item["status"] == status_filter):
 
                 st.image(item["image_path"], width=250)
-                st.write(f"📂 Kategorie: {item['category']}")
-                st.write(f"📍 Fundort: {item['location']}")
-                st.write(f"📝 Beschreibung: {item['description']}")
-                st.write(f"👤 Finder: {item['finder']}")
-                st.write(f"📅 Datum: {item['date']}")
-                st.write(f"📌 Status: {item['status']}")
+                st.write(f"📂 {item['category']}")
+                st.write(f"📍 {item['location']}")
+                st.write(f"📝 {item['description']}")
+                st.write(f"👤 {item['finder']}")
+                st.write(f"📅 {item['date']}")
+                st.write(f"📌 {item['status']}")
 
-                # Nachrichten
-                with st.expander("📬 Nachricht hinterlassen"):
-                    message = st.text_area(f"Nachricht für {item['finder']}", key=f"msg_{item['id']}")
+                with st.expander("📬 Nachricht"):
+                    msg = st.text_area("Nachricht", key=f"msg_{item['id']}")
                     if st.button("Senden", key=f"send_{item['id']}"):
                         item["messages"].append({
-                            "text": message,
+                            "text": msg,
                             "date": datetime.now().strftime("%d.%m.%Y %H:%M")
                         })
                         save_database(db)
-                        st.success("Nachricht gespeichert!")
-
-                if item["messages"]:
-                    with st.expander("📨 Nachrichten anzeigen"):
-                        for msg in item["messages"]:
-                            st.write(f"{msg['date']} - {msg['text']}")
+                        st.success("Gesendet!")
 
                 if item["status"] == "Offen":
-                    if st.button("✅ Als abgeholt markieren", key=f"done_{item['id']}"):
+                    if st.button("✅ Abgeholt", key=f"done_{item['id']}"):
                         item["status"] = "Abgeholt"
                         save_database(db)
-                        st.success("Status geändert!")
+                        st.success("Status aktualisiert!")
 
                 st.write("---")
