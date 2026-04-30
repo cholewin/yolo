@@ -1,0 +1,9 @@
+streamlit>=1.30.0
+
+ultralytics>=8.0.0
+
+huggingface_hub>=0.20.0
+
+pillow>=9.0.0
+
+numpy>=1.23.0
