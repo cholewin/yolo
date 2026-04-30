@@ -1,3 +1,5 @@
+import os
+os.environ["STREAMLIT_SERVER_HEADLESS"] = "true"
 import streamlit as st
 from ultralytics import YOLO
 from huggingface_hub import hf_hub_download
