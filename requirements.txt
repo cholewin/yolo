@@ -1,6 +1,6 @@
-streamlit
-ultralytics
-huggingface_hub
-pillow
-numpy
-opencv-python-headless
+streamlit==1.32.0
+ultralytics==8.0.230
+huggingface_hub==0.20.3
+pillow==10.2.0
+numpy==1.26.4
+opencv-python-headless==4.9.0.80
